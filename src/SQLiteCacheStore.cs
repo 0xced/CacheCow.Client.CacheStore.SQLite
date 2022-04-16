@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using CacheCow.Common;
 using SQLite;
@@ -17,6 +18,8 @@ public sealed class SQLiteCacheStore : ICacheStore
 {
     private readonly SQLiteAsyncConnection _db;
     private readonly IHttpMessageSerializerAsync _serializer;
+    private readonly SemaphoreSlim _semaphore;
+    private bool _tableIsCreated;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SQLiteCacheStore"/> class.
@@ -28,19 +31,38 @@ public sealed class SQLiteCacheStore : ICacheStore
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         _serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+        _semaphore = new SemaphoreSlim(1, 1);
+        _tableIsCreated = false;
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
-        // Nothing to dispose
+        _semaphore.Dispose();
     }
 
     private async Task EnsureTableCreatedAsync()
     {
-        // The method is named `CreateTableAsync` but is documented as is:
-        // > Executes a "create table if not exists" on the database.
-        await _db.CreateTableAsync<HttpResponse>().ConfigureAwait(false);
+        if (_tableIsCreated)
+        {
+            return;
+        }
+
+        await _semaphore.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_tableIsCreated)
+            {
+                // The method is named `CreateTableAsync` but is documented as is:
+                // > Executes a "create table if not exists" on the database.
+                await _db.CreateTableAsync<HttpResponse>().ConfigureAwait(false);
+                _tableIsCreated = true;
+            }
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
     }
 
     /// <inheritdoc />
